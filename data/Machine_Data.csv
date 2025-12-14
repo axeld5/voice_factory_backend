@@ -1,0 +1,11 @@
+machine_id,machine_name,machine_type,zone_id,status
+101,Press Machine 1,Hydraulic Press,Zone A-1,Active
+102,Conveyor Belt A,Conveyor,Zone A-2,Active
+103,CNC Milla 1,CNC Milling,Zone B-1,Maintenance
+104,Robot Arm X,Robot Arm,Zone B-2,Active
+105,Assembly Station 1,Assembly,Zone C-1,Idle
+106,Press Machine 2,Hydraulic Press,Zone A-1,Active
+107,Conveyor Belt B,Conveyor,Zone A-2,Offline
+108,CNC Mill 2,CNC Milling,Zone B-1,Active
+109,Robot Arm Y,Robot Arm,Zone B-2,Active
+110,Packaging Unit 1,Packaging,Zone C-2,Active

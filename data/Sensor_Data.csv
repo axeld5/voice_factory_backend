@@ -1,0 +1,11 @@
+sensor_id,machine_id,sensor_type,unit,threshold_max
+M101-TEMP-01,101,Temperature,Celsius,100.0
+M102-SPD-01,102,Speed,m/s,5.0
+M103-VIB-01,103,Vibration,Hz,50.0
+M104-PWR-01,104,Power,Amps,20.0
+M105-CNT-01,105,Count,Units,1000.0
+M106-PRS-01,106,Pressure,Bar,200.0
+M107-SPD-01,107,Speed,m/s,5.0
+M108-VIB-01,108,Vibration,Hz,50.0
+M109-POS-01,109,Position,Degrees,360.0
+M110-TEMP-01,110,Temperature,Celsius,80.0
