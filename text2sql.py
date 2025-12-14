@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import argparse
+import json
+import io
 from pathlib import Path
-from typing import Optional
+from threading import Lock
+from typing import Literal, Optional
 
 import duckdb
 import pandas as pd
 from openai import OpenAI
+from pydantic import BaseModel
 
 import os
 from dotenv import load_dotenv
@@ -217,6 +221,239 @@ def render_output2answer_prompt(template: str, user_query: str, sql_used: str, s
     )
 
 
+class Output2AnswerStructured(BaseModel):
+    """
+    Structured output for the output2answer step.
+
+    summary:
+      - TTS-friendly answer
+      - If listing multiple items, use newline-separated lines
+    viz_kind:
+      - "text_image" for single-line summaries
+      - otherwise one of bar/line/scatter/heatmap/table
+    viz_x/viz_y:
+      - optional column names from the SQL result to plot
+    viz_title:
+      - optional title
+    """
+
+    summary: str
+    viz_kind: Literal["text_image", "bar", "line", "scatter", "heatmap", "table"]
+    # For viz_kind="text_image": minimal label-free on-screen string (value + optional timestamp)
+    text_box: Optional[str] = None
+    viz_x: Optional[str] = None
+    viz_y: Optional[str] = None
+    viz_title: Optional[str] = None
+
+
+class AnswerWithVisualizationPlan(BaseModel):
+    summary: str
+    viz_kind: Literal["text_image", "bar", "line", "scatter", "heatmap", "table"]
+    text_box: Optional[str] = None
+    viz_x: Optional[str] = None
+    viz_y: Optional[str] = None
+    viz_title: Optional[str] = None
+
+
+_MATPLOTLIB_LOCK = Lock()
+
+
+def _coerce_datetime_if_possible(s: pd.Series) -> pd.Series:
+    try:
+        dt = pd.to_datetime(s, errors="coerce", utc=False)
+        if dt.notna().mean() < 0.6:
+            return s
+        return dt
+    except Exception:
+        return s
+
+
+def _pick_xy(df: pd.DataFrame) -> tuple[Optional[str], Optional[str], str]:
+    """Heuristic fallback when plan columns are missing."""
+    if df is None or df.empty or len(df.columns) == 0:
+        return None, None, "table"
+
+    df2 = df.copy()
+    for c in df2.columns:
+        if df2[c].dtype == "object":
+            df2[c] = _coerce_datetime_if_possible(df2[c])
+
+    numeric_cols = [c for c in df2.columns if pd.api.types.is_numeric_dtype(df2[c])]
+    datetime_cols = [c for c in df2.columns if pd.api.types.is_datetime64_any_dtype(df2[c])]
+    other_cols = [c for c in df2.columns if c not in numeric_cols]
+
+    if datetime_cols and numeric_cols:
+        return datetime_cols[0], numeric_cols[0], "line"
+    if other_cols and numeric_cols:
+        return other_cols[0], numeric_cols[0], "bar"
+    if len(numeric_cols) >= 2:
+        return numeric_cols[0], numeric_cols[1], "scatter"
+    return None, None, "table"
+
+
+def render_visualization_png_bytes(
+    *,
+    answer_summary: str,
+    df: pd.DataFrame,
+    plan: Output2AnswerStructured,
+    dpi: int = 200,
+) -> bytes:
+    """
+    Render the visualization to PNG bytes.
+
+    Enforced rules:
+    - single-line summary => black text on white image
+    - multi-line summary => matplotlib/seaborn visualization
+    """
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    summary = (answer_summary or "").strip()
+
+    # Enforce single-line vs multi-line behavior regardless of model output.
+    if "\n" in summary:
+        viz_kind: Literal["bar", "line", "scatter", "heatmap", "table"] = (
+            plan.viz_kind if plan.viz_kind != "text_image" else "table"
+        )
+    else:
+        viz_kind = "text_image"  # type: ignore[assignment]
+
+    plan_x = plan.viz_x
+    plan_y = plan.viz_y
+    plan_title = plan.viz_title
+
+    with _MATPLOTLIB_LOCK:
+        sns.set_theme(style="whitegrid")
+
+        if viz_kind == "text_image":
+            text = ((plan.text_box or "") or summary).strip()
+            # keep it strictly single-line for the image
+            text = " ".join(text.splitlines()).strip()
+            fig_w = max(6.0, min(16.0, 0.15 * max(len(text), 1)))
+            fig_h = 2.5
+            fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=dpi)
+            fig.patch.set_facecolor("white")
+            ax.set_facecolor("white")
+            ax.axis("off")
+            ax.text(
+                0.5,
+                0.5,
+                text,
+                ha="center",
+                va="center",
+                color="black",
+                fontsize=18,
+                wrap=False,
+            )
+            fig.tight_layout()
+            buf = io.BytesIO()
+            fig.savefig(buf, format="png", bbox_inches="tight", facecolor="white")
+            plt.close(fig)
+            return buf.getvalue()
+
+        if df is None or df.empty:
+            fig, ax = plt.subplots(figsize=(8, 2.8), dpi=dpi)
+            fig.patch.set_facecolor("white")
+            ax.set_facecolor("white")
+            ax.axis("off")
+            ax.text(
+                0.5,
+                0.5,
+                "No data to visualize.",
+                ha="center",
+                va="center",
+                color="black",
+                fontsize=14,
+            )
+            fig.tight_layout()
+            buf = io.BytesIO()
+            fig.savefig(buf, format="png", bbox_inches="tight", facecolor="white")
+            plt.close(fig)
+            return buf.getvalue()
+
+        df_plot = df.copy()
+        for c in df_plot.columns:
+            if df_plot[c].dtype == "object":
+                df_plot[c] = _coerce_datetime_if_possible(df_plot[c])
+
+        x_col = plan_x if (plan_x in df_plot.columns) else None
+        y_col = plan_y if (plan_y in df_plot.columns) else None
+        kind = viz_kind
+
+        if kind in ("bar", "line", "scatter"):
+            if x_col is None or y_col is None:
+                x_col, y_col, kind = _pick_xy(df_plot)
+
+        if kind == "heatmap":
+            num = df_plot.select_dtypes(include="number")
+            if num.shape[1] >= 2:
+                fig, ax = plt.subplots(figsize=(8, 5), dpi=dpi)
+                corr = num.corr(numeric_only=True)
+                sns.heatmap(corr, annot=False, cmap="viridis", ax=ax)
+                ax.set_title(plan_title or "Correlation heatmap")
+                fig.tight_layout()
+                buf = io.BytesIO()
+                fig.savefig(buf, format="png", bbox_inches="tight")
+                plt.close(fig)
+                return buf.getvalue()
+            x_col, y_col, kind = _pick_xy(df_plot)
+
+        if kind == "bar" and x_col and y_col:
+            fig, ax = plt.subplots(figsize=(9, 5), dpi=dpi)
+            df_small = df_plot.copy()
+            if df_small[x_col].nunique(dropna=False) > 30:
+                df_small = df_small.head(30)
+            sns.barplot(data=df_small, x=x_col, y=y_col, ax=ax)
+            ax.set_title(plan_title or f"{y_col} by {x_col}")
+            ax.tick_params(axis="x", rotation=30)
+            fig.tight_layout()
+            buf = io.BytesIO()
+            fig.savefig(buf, format="png", bbox_inches="tight")
+            plt.close(fig)
+            return buf.getvalue()
+
+        if kind == "line" and x_col and y_col:
+            fig, ax = plt.subplots(figsize=(9, 5), dpi=dpi)
+            df_small = df_plot.sort_values(by=x_col) if x_col in df_plot.columns else df_plot
+            sns.lineplot(data=df_small, x=x_col, y=y_col, ax=ax)
+            ax.set_title(plan_title or f"{y_col} over {x_col}")
+            fig.tight_layout()
+            buf = io.BytesIO()
+            fig.savefig(buf, format="png", bbox_inches="tight")
+            plt.close(fig)
+            return buf.getvalue()
+
+        if kind == "scatter" and x_col and y_col:
+            fig, ax = plt.subplots(figsize=(7, 5), dpi=dpi)
+            sns.scatterplot(data=df_plot, x=x_col, y=y_col, ax=ax)
+            ax.set_title(plan_title or f"{y_col} vs {x_col}")
+            fig.tight_layout()
+            buf = io.BytesIO()
+            fig.savefig(buf, format="png", bbox_inches="tight")
+            plt.close(fig)
+            return buf.getvalue()
+
+        # Table fallback
+        fig, ax = plt.subplots(figsize=(10, 0.5 + 0.35 * min(len(df_plot), 15)), dpi=dpi)
+        ax.axis("off")
+        ax.set_title(plan_title or "Result table")
+        df_show = df_plot.head(15).copy()
+        tbl = ax.table(
+            cellText=df_show.values,
+            colLabels=[str(c) for c in df_show.columns],
+            loc="center",
+            cellLoc="left",
+        )
+        tbl.auto_set_font_size(False)
+        tbl.set_fontsize(9)
+        tbl.scale(1, 1.25)
+        fig.tight_layout()
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", bbox_inches="tight", facecolor="white")
+        plt.close(fig)
+        return buf.getvalue()
+
+
 def generate_tts_answer(
     user_query: str,
     sql_used: str,
@@ -224,17 +461,46 @@ def generate_tts_answer(
     prompt_path: str,
     model: str = "gpt-5.2",
     max_rows_for_model: int = 20,
-) -> str:
+) -> AnswerWithVisualizationPlan:
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     template = load_output2answer_prompt(prompt_path)
     sql_result_text = df_to_compact_text(df, max_rows=max_rows_for_model)
     full_prompt = render_output2answer_prompt(template, user_query, sql_used, sql_result_text)
 
-    response = client.responses.create(
-        model=model,
-        input=full_prompt,
+    # Prefer Structured Outputs parsing; fall back to JSON parsing if needed.
+    try:
+        response = client.responses.parse(
+            model=model,
+            input=[
+                {"role": "system", "content": full_prompt},
+            ],
+            text_format=Output2AnswerStructured,
+        )
+        plan: Output2AnswerStructured = response.output_parsed
+    except Exception:
+        response = client.responses.create(
+            model=model,
+            input=[
+                {
+                    "role": "system",
+                    "content": full_prompt
+                    + "\n\nIf structured outputs are unavailable, return a JSON object with keys:"
+                    + " summary, viz_kind, text_box, viz_x, viz_y, viz_title (and nothing else).",
+                }
+            ],
+        )
+        raw = (response.output_text or "").strip()
+        # Try to parse as JSON
+        plan = Output2AnswerStructured.model_validate(json.loads(raw))
+
+    return AnswerWithVisualizationPlan(
+        summary=plan.summary.strip(),
+        viz_kind=plan.viz_kind,
+        text_box=(plan.text_box.strip() if plan.text_box else None),
+        viz_x=plan.viz_x,
+        viz_y=plan.viz_y,
+        viz_title=plan.viz_title,
     )
-    return (response.output_text or "").strip()
 
 
 # ---------- 7) Pipeline ----------
@@ -293,8 +559,14 @@ def run_pipeline(
             model=tts_model,
             max_rows_for_model=output2answer_max_rows,
         )
-        print("\n--- TTS Answer ---")
-        print(answer)
+        print("\n--- Answer Summary (TTS) ---")
+        print(answer.summary)
+        viz_png = render_visualization_png_bytes(answer_summary=answer.summary, df=df, plan=answer)
+        viz_out = get_outputs_dir() / "visualization.png"
+        viz_out.parent.mkdir(parents=True, exist_ok=True)
+        viz_out.write_bytes(viz_png)
+        print("\n--- Visualization Image ---")
+        print(str(viz_out))
 
     # Print a ready-to-run command for output2answer.py
     print("\n--- Next step (run output2answer.py) ---")

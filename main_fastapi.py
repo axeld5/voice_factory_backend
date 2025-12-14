@@ -21,6 +21,7 @@ from text2sql import (
     generate_tts_answer,
     get_data_path,
     get_prompt_path,
+    render_visualization_png_bytes,
 )
 
 load_dotenv()
@@ -51,15 +52,25 @@ class VoiceFactoryOutput:
 
     - answer_text: the final text answer (what you call "answer text")
     - audio_bytes: TTS audio bytes of answer_text
+    - visualization_bytes: PNG bytes of the visualization
     """
 
     answer_text: str
+    visualization_bytes: Optional[bytes] = None
+    visualization_filename: Optional[str] = None
+    visualization_mime_type: Optional[str] = None
     audio_bytes: Optional[bytes] = None
     audio_filename: Optional[str] = None
     audio_mime_type: Optional[str] = None
 
     def to_api_payload(self) -> dict:
         payload: dict = {"answer_text": self.answer_text}
+        if self.visualization_bytes is not None:
+            payload["visualization"] = {
+                "filename": self.visualization_filename or "visualization.png",
+                "mime_type": self.visualization_mime_type or "image/png",
+                "image_base64": base64.b64encode(self.visualization_bytes).decode("ascii"),
+            }
         if self.audio_bytes is None:
             return payload
 
@@ -132,22 +143,36 @@ async def run_voice_factory_pipeline(
     )
 
     # 4) Output-to-answer (answer text)
-    answer_text = generate_tts_answer(
+    ans = generate_tts_answer(
         user_query=user_query,
         sql_used=sql,
         df=df,
         prompt_path=paths["output2answer_prompt"],
         model="gpt-5.2",
         max_rows_for_model=20,
-    ).strip()
+    )
+    answer_text = ans.summary.strip()
     if not answer_text:
         raise ValueError("Answer generation returned empty text.")
 
+    out_id = uuid.uuid4().hex
+    viz_png = render_visualization_png_bytes(
+        answer_summary=answer_text,
+        df=df,
+        plan=ans,
+    )
+    viz_path = paths["outputs_dir"] / f"visualization_{out_id}.png"
+    viz_path.write_bytes(viz_png)
+
     if not include_audio:
-        return VoiceFactoryOutput(answer_text=answer_text)
+        return VoiceFactoryOutput(
+            answer_text=answer_text,
+            visualization_bytes=viz_png,
+            visualization_filename=viz_path.name,
+            visualization_mime_type="image/png",
+        )
 
     # 5) TTS (bytes)
-    out_id = uuid.uuid4().hex
     wav_path = paths["outputs_dir"] / f"answer_{out_id}.wav"
     tts_res = await tts_from_text(
         answer_text,
@@ -163,6 +188,9 @@ async def run_voice_factory_pipeline(
 
     return VoiceFactoryOutput(
         answer_text=answer_text,
+        visualization_bytes=viz_png,
+        visualization_filename=viz_path.name,
+        visualization_mime_type="image/png",
         audio_bytes=tts_res.audio_bytes,
         audio_filename=tts_res.output_path.name,
         audio_mime_type=mime,
