@@ -24,6 +24,6 @@ ENV PATH="/opt/venv/bin:${PATH}"
 # Copy application code
 COPY . .
 
-# Runs the CLI pipeline; any extra args are appended (e.g. --audio /path/to/file)
-ENTRYPOINT ["python", "main.py"]
-CMD []
+# Run the FastAPI server
+EXPOSE 8000
+ENTRYPOINT ["uvicorn", "main_fastapi:app", "--host", "0.0.0.0", "--port", "8000"]

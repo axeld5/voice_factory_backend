@@ -11,4 +11,7 @@ dependencies = [
   "python-dotenv>=1.0.0",
   "requests>=2.31.0",
   "gradium==0.5.4",
+  "fastapi>=0.110.0",
+  "uvicorn[standard]>=0.30.0",
+  "python-multipart>=0.0.9",
 ]
