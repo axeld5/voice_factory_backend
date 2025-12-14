@@ -81,6 +81,11 @@ def main() -> None:
     default_sensor_csv = str(get_data_path("Sensor_Data.csv"))
     default_telemetry_csv = str(get_data_path("Telemetry_Data.csv"))
 
+    # Default: keep all generated artifacts under outputs/
+    default_outputs_dir = (Path(__file__).parent / "outputs").resolve()
+    default_result_csv = str(default_outputs_dir / "result.csv")
+    default_wav_out = str(default_outputs_dir / "final_answer.wav")
+
     parser = argparse.ArgumentParser(
         description="Voice -> STT (pyannote) -> Text2SQL (OpenAI) -> Answer (OpenAI) -> TTS (Gradium) -> WAV"
     )
@@ -114,8 +119,8 @@ def main() -> None:
     )
 
     # Outputs
-    parser.add_argument("--result-out-csv", default="result.csv")
-    parser.add_argument("--wav-out", default="final_answer.wav")
+    parser.add_argument("--result-out-csv", default=default_result_csv)
+    parser.add_argument("--wav-out", default=default_wav_out)
 
     # TTS
     parser.add_argument("--voice-id", default="YTpq7expH9539ERJ")

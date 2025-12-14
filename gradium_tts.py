@@ -48,6 +48,7 @@ async def tts_from_text(
     Generate TTS locally (writes a wav file) and returns bytes + metadata.
     """
     output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
     _client = client or gradium.client.GradiumClient()
     result = await _client.tts(

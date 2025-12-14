@@ -13,27 +13,6 @@ load_dotenv()
 
 PYANNOTE_API_BASE = "https://api.pyannote.ai/v1"
 
-import subprocess
-
-def preprocess_audio_for_stt(in_path: str | Path, out_path: str | Path) -> Path:
-    in_path = Path(in_path).expanduser().resolve()
-    out_path = Path(out_path).expanduser().resolve()
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # mono, 16kHz, PCM wav (fast + predictable)
-    cmd = [
-        "ffmpeg", "-y",
-        "-i", str(in_path),
-        "-ac", "1",
-        "-ar", "16000",
-        "-vn",
-        str(out_path),
-    ]
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return out_path
-
-
-
 class PyannoteAIError(RuntimeError):
     pass
 

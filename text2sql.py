@@ -19,6 +19,11 @@ def get_project_root() -> Path:
     return Path(__file__).parent.resolve()
 
 
+def get_outputs_dir() -> Path:
+    """Returns path to outputs/ folder (created by writers as needed)."""
+    return get_project_root() / "outputs"
+
+
 # ---------- Hardcoded paths ----------
 def get_data_path(filename: str) -> Path:
     """Returns path to a data file in the data/ folder."""
@@ -308,6 +313,7 @@ def main() -> None:
     default_machine_csv = str(get_data_path("Machine_Data.csv"))
     default_sensor_csv = str(get_data_path("Sensor_Data.csv"))
     default_telemetry_csv = str(get_data_path("Telemetry_Data.csv"))
+    default_result_csv = str(get_outputs_dir() / "result.csv")
 
     parser = argparse.ArgumentParser(description="Text2SQL over CSVs using OpenAI + DuckDB (and save CSV for output2answer.py).")
     parser.add_argument("--prompt", default=default_text2sql_prompt, help=f"Path to text2sql_prompt.txt (default: {default_text2sql_prompt})")
@@ -321,8 +327,8 @@ def main() -> None:
     # Compatibility: save results for output2answer.py
     parser.add_argument(
         "--result-out-csv",
-        default="result.csv",
-        help="Where to save the SQL result as CSV (consumed by output2answer.py). Default: result.csv",
+        default=default_result_csv,
+        help="Where to save the SQL result as CSV (consumed by output2answer.py). Default: outputs/result.csv",
     )
 
     # Optional: do output2answer step inside this script too
