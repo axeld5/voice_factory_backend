@@ -296,7 +296,7 @@ def perform_stt_from_local_audio(
     return perform_stt(
         media_url,
         api_key=api_key,
-        poll_interval_s=poll_interval_s,
+        poll_interval_s=1,
         timeout_s=timeout_s,
         transcript_level=transcript_level,
     )

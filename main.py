@@ -12,7 +12,6 @@ import pandas as pd
 from pyannote_stt import (
     perform_stt_from_local_audio,
     format_turn_level_transcript,
-    preprocess_audio_for_stt,
 )
 from text2sql import (
     get_data_path,
@@ -136,6 +135,7 @@ def main() -> None:
     # Keys needed for the pipeline
     ensure_env("PYANNOTE_API_KEY")
     ensure_env("OPENAI_API_KEY")
+    ensure_env("GRADIUM_API_KEY")
 
     pipeline_t0 = time.perf_counter()
     print(f"[time] pipeline start: {_ts()}")

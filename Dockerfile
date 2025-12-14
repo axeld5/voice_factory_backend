@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
@@ -13,15 +13,17 @@ WORKDIR /app
 # Install uv (fast Python package installer)
 RUN pip install --no-cache-dir uv
 
-# Install Python deps (cached layer)
-COPY requirements.txt ./requirements.txt
-RUN uv venv /opt/venv \
-  && uv pip install --python /opt/venv/bin/python --no-cache -r requirements.txt
+# Install Python deps via uv sync (cached layer)
+# If uv.lock exists, uv will use it; otherwise it will resolve from pyproject.toml.
+COPY pyproject.toml uv.lock* ./
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv
+RUN uv sync --no-dev --no-install-project
 
 ENV PATH="/opt/venv/bin:${PATH}"
 
 # Copy application code
 COPY . .
 
-# Runs the CLI pipeline; pass args like: --audio /path/to/file
-CMD ["python", "main.py"]
+# Runs the CLI pipeline; any extra args are appended (e.g. --audio /path/to/file)
+ENTRYPOINT ["python", "main.py"]
+CMD []

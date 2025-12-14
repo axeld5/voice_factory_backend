@@ -298,11 +298,13 @@ def run_pipeline(
 
     # Print a ready-to-run command for output2answer.py
     print("\n--- Next step (run output2answer.py) ---")
+    escaped_user_query = user_query.replace('"', '\\"')
+    escaped_sql = sql.replace('"', '\\"')
     print(
         "python output2answer.py "
         f"--prompt output2answer.txt "
-        f'--user-query "{user_query.replace('"', r'\"')}" '
-        f'--sql-used "{sql.replace('"', r'\"')}" '
+        f'--user-query "{escaped_user_query}" '
+        f'--sql-used "{escaped_sql}" '
         f"--result-csv {saved_path}"
     )
 

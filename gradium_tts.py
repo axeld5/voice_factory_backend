@@ -9,7 +9,10 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import gradium
+from dotenv import load_dotenv
+import os
 
+load_dotenv()
 
 @dataclass(frozen=True)
 class TTSResult:
@@ -50,7 +53,7 @@ async def tts_from_text(
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    _client = client or gradium.client.GradiumClient()
+    _client = client or gradium.client.GradiumClient(api_key=os.getenv("GRADIUM_API_KEY"))
     result = await _client.tts(
         setup={
             "model_name": model_name,
