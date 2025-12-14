@@ -13,6 +13,23 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+# ---------- Helper: Get project root (where this script is located) ----------
+def get_project_root() -> Path:
+    """Returns the directory containing this script (project root)."""
+    return Path(__file__).parent.resolve()
+
+
+# ---------- Hardcoded paths ----------
+def get_data_path(filename: str) -> Path:
+    """Returns path to a data file in the data/ folder."""
+    return get_project_root() / "data" / filename
+
+
+def get_prompt_path(filename: str) -> Path:
+    """Returns path to a prompt file in the prompts/ folder."""
+    return get_project_root() / "prompts" / filename
+
+
 # ---------- 1) Load Text2SQL prompt from file ----------
 def load_prompt(prompt_path: str) -> str:
     prompt_file = Path(prompt_path).expanduser().resolve()
@@ -52,7 +69,7 @@ def connect_and_register(machine_csv: str, sensor_csv: str, telemetry_csv: str) 
 
 
 # ---------- 3) Call OpenAI to generate SQL ----------
-def generate_sql(user_query: str, prompt_path: str, model: str = "gpt-5-nano") -> str:
+def generate_sql(user_query: str, prompt_path: str, model: str = "gpt-5.2") -> str:
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     system_prompt = load_prompt(prompt_path)
 
@@ -126,7 +143,7 @@ def generate_tts_answer(
     sql_used: str,
     df: pd.DataFrame,
     prompt_path: str,
-    model: str = "gpt-5-nano",
+    model: str = "gpt-5.2",
     max_rows_for_model: int = 20,
 ) -> str:
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -204,13 +221,20 @@ def run_pipeline(
     )
 
 def main() -> None:
+    # Hardcoded paths - data is always in data/ folder, prompts in prompts/ folder
+    default_text2sql_prompt = str(get_prompt_path("text2sql_prompt.txt"))
+    default_output2answer_prompt = str(get_prompt_path("output2answer_prompt.txt"))
+    default_machine_csv = str(get_data_path("Machine_Data.csv"))
+    default_sensor_csv = str(get_data_path("Sensor_Data.csv"))
+    default_telemetry_csv = str(get_data_path("Telemetry_Data.csv"))
+
     parser = argparse.ArgumentParser(description="Text2SQL over CSVs using OpenAI + DuckDB (and save CSV for output2answer.py).")
-    parser.add_argument("--prompt", required=True, help="Path to text2sql_prompt.txt")
-    parser.add_argument("--machine", required=True, help="Path to Machine_Data.csv")
-    parser.add_argument("--sensor", required=True, help="Path to Sensor_Data.csv")
-    parser.add_argument("--telemetry", required=True, help="Path to Telemetry_Data.csv")
+    parser.add_argument("--prompt", default=default_text2sql_prompt, help=f"Path to text2sql_prompt.txt (default: {default_text2sql_prompt})")
+    parser.add_argument("--machine", default=default_machine_csv, help=f"Path to Machine_Data.csv (default: {default_machine_csv})")
+    parser.add_argument("--sensor", default=default_sensor_csv, help=f"Path to Sensor_Data.csv (default: {default_sensor_csv})")
+    parser.add_argument("--telemetry", default=default_telemetry_csv, help=f"Path to Telemetry_Data.csv (default: {default_telemetry_csv})")
     parser.add_argument("--query", required=True, help="User natural-language query")
-    parser.add_argument("--model", default="gpt-5-nano", help="OpenAI model for Text2SQL")
+    parser.add_argument("--model", default="gpt-5.2", help="OpenAI model for Text2SQL")
     parser.add_argument("--max-print-rows", type=int, default=50, help="Max rows to preview in terminal")
 
     # Compatibility: save results for output2answer.py
@@ -224,10 +248,11 @@ def main() -> None:
     parser.add_argument(
         "--also-generate-tts",
         action="store_true",
+        default=True,
         help="If set, also generate a short TTS-friendly answer using output2answer prompt.",
     )
-    parser.add_argument("--output2answer-prompt", default=None, help="Path to output2answer.txt (required if --also-generate-tts)")
-    parser.add_argument("--output2answer-model", default=None, help="Model for output-to-answer step (defaults to --model)")
+    parser.add_argument("--output2answer-prompt", default=default_output2answer_prompt, help=f"Path to output2answer_prompt.txt (default: {default_output2answer_prompt})")
+    parser.add_argument("--output2answer-model", default="gpt-5.2", help="Model for output-to-answer step (defaults to --model)")
     parser.add_argument("--output2answer-max-rows", type=int, default=20, help="Max result rows to pass into output-to-answer step")
 
     args = parser.parse_args()

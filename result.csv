@@ -1,3 +1,1 @@
-machine_id,machine_name,timestamp,value
-101,Press Machine 1,2023-10-27 08:30:00,88.27
-110,Packaging Unit 1,2023-10-27 09:15:00,57.61
+machine_id,machine_name,latest_temperature_timestamp,latest_temperature_value
