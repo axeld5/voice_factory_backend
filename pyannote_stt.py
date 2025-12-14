@@ -110,26 +110,47 @@ def create_media_upload_url(
 def upload_audio_stream_to_presigned_url(
     presigned_put_url: str,
     audio_stream: BinaryIO,
-    *,
-    chunk_size: int = 1024 * 1024,
 ) -> None:
     """
     Step 2: PUT local audio bytes to the pre-signed URL.
-    This uses streaming upload (does not read the whole file into memory).
-    """
-    def gen():
-        while True:
-            chunk = audio_stream.read(chunk_size)
-            if not chunk:
-                break
-            yield chunk
 
-    r = requests.put(
-        presigned_put_url,
-        data=gen(),
-        headers={"Content-Type": "application/octet-stream"},
-        timeout=10 * 60,
-    )
+    IMPORTANT:
+    - Do NOT stream via a generator: requests will use Transfer-Encoding: chunked.
+    - Many S3 presigned PUT URLs reject chunked uploads and require Content-Length.
+    """
+    # Compute remaining bytes in the stream (works for normal file objects)
+    try:
+        cur = audio_stream.tell()
+        audio_stream.seek(0, 2)  # end
+        end = audio_stream.tell()
+        audio_stream.seek(cur, 0)
+        content_length = end - cur
+    except Exception:
+        # Fallback: if stream isn't seekable, read into memory (last resort)
+        data = audio_stream.read()
+        content_length = len(data)
+        audio_stream = None  # so we use `data=` below
+
+    headers = {
+        "Content-Type": "application/octet-stream",
+        "Content-Length": str(content_length),
+    }
+
+    if audio_stream is not None:
+        r = requests.put(
+            presigned_put_url,
+            data=audio_stream,   # file-like object, not a generator
+            headers=headers,
+            timeout=10 * 60,
+        )
+    else:
+        r = requests.put(
+            presigned_put_url,
+            data=data,           # bytes fallback
+            headers=headers,
+            timeout=10 * 60,
+        )
+
     if r.status_code not in (200, 201, 204):
         raise PyannoteAIError(f"Upload PUT failed: {r.status_code} - {r.text}")
 

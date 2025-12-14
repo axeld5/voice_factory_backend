@@ -38,6 +38,57 @@ def load_prompt(prompt_path: str) -> str:
     return prompt_file.read_text(encoding="utf-8")
 
 
+def _escape_markdown_cell(value: object, *, max_len: int = 80) -> str:
+    """Escape markdown table cells (keep it compact + safe)."""
+    s = "" if value is None else str(value)
+    s = s.replace("\n", " ").replace("|", "\\|").strip()
+    if len(s) > max_len:
+        s = s[: max_len - 1] + "…"
+    return s
+
+
+def df_to_markdown_table(df: pd.DataFrame) -> str:
+    """Render a small dataframe as a GitHub-flavored markdown table (no tabulate dependency)."""
+    if df is None or df.empty:
+        return "_(empty)_"
+
+    cols = [str(c) for c in df.columns.tolist()]
+    header = "| " + " | ".join(_escape_markdown_cell(c) for c in cols) + " |"
+    sep = "| " + " | ".join("---" for _ in cols) + " |"
+    rows = []
+    for _, row in df.iterrows():
+        rows.append("| " + " | ".join(_escape_markdown_cell(row[c]) for c in cols) + " |")
+    return "\n".join([header, sep, *rows])
+
+
+def load_csv_head_markdown(csv_path: str, *, n: int = 5) -> str:
+    """Read only the first n rows of a CSV and render as markdown."""
+    p = Path(csv_path).expanduser().resolve()
+    if not p.exists():
+        return f"_(missing file: {p})_"
+    try:
+        df = pd.read_csv(p, nrows=n)
+    except Exception as e:
+        return f"_(failed to read: {p.name}: {e})_"
+    return df_to_markdown_table(df)
+
+
+def render_text2sql_prompt(
+    template: str,
+    *,
+    user_query: str,
+    machine_head_md: str,
+    sensor_head_md: str,
+    telemetry_head_md: str,
+) -> str:
+    return (
+        template.replace("{{USER_QUERY}}", user_query)
+        .replace("{{MACHINE_DATA_HEAD_MD}}", machine_head_md)
+        .replace("{{SENSOR_DATA_HEAD_MD}}", sensor_head_md)
+        .replace("{{TELEMETRY_DATA_HEAD_MD}}", telemetry_head_md)
+    )
+
+
 # ---------- 2) Load CSVs into DuckDB ----------
 def connect_and_register(machine_csv: str, sensor_csv: str, telemetry_csv: str) -> duckdb.DuckDBPyConnection:
     con = duckdb.connect(database=":memory:")
@@ -69,9 +120,32 @@ def connect_and_register(machine_csv: str, sensor_csv: str, telemetry_csv: str) 
 
 
 # ---------- 3) Call OpenAI to generate SQL ----------
-def generate_sql(user_query: str, prompt_path: str, model: str = "gpt-5.2") -> str:
+def generate_sql(
+    user_query: str,
+    prompt_path: str,
+    model: str = "gpt-5.2",
+    *,
+    machine_csv: Optional[str] = None,
+    sensor_csv: Optional[str] = None,
+    telemetry_csv: Optional[str] = None,
+    data_head_rows: int = 5,
+) -> str:
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-    system_prompt = load_prompt(prompt_path)
+    template = load_prompt(prompt_path)
+
+    # Optional: inject markdown head() previews of each CSV into the system prompt.
+    # This helps the model map the schema to real values (zones, ids, sensor types, etc.).
+    machine_head_md = load_csv_head_markdown(machine_csv, n=data_head_rows) if machine_csv else "_(not provided)_"
+    sensor_head_md = load_csv_head_markdown(sensor_csv, n=data_head_rows) if sensor_csv else "_(not provided)_"
+    telemetry_head_md = load_csv_head_markdown(telemetry_csv, n=data_head_rows) if telemetry_csv else "_(not provided)_"
+
+    system_prompt = render_text2sql_prompt(
+        template,
+        user_query=user_query,
+        machine_head_md=machine_head_md,
+        sensor_head_md=sensor_head_md,
+        telemetry_head_md=telemetry_head_md,
+    )
 
     response = client.responses.create(
         model=model,
@@ -174,7 +248,14 @@ def run_pipeline(
     output2answer_model: Optional[str],
     output2answer_max_rows: int,
 ) -> None:
-    sql = generate_sql(user_query=user_query, prompt_path=text2sql_prompt_path, model=model)
+    sql = generate_sql(
+        user_query=user_query,
+        prompt_path=text2sql_prompt_path,
+        model=model,
+        machine_csv=machine_csv,
+        sensor_csv=sensor_csv,
+        telemetry_csv=telemetry_csv,
+    )
 
     print("\n--- Generated SQL ---")
     print(sql)

@@ -28,6 +28,17 @@ Relationships:
 - Machine_Data.machine_id = Sensor_Data.machine_id
 - Sensor_Data.sensor_id = Telemetry_Data.sensor_id
 
+Data previews (first rows from each CSV, rendered as markdown tables):
+
+Machine_Data head:
+{{MACHINE_DATA_HEAD_MD}}
+
+Sensor_Data head:
+{{SENSOR_DATA_HEAD_MD}}
+
+Telemetry_Data head:
+{{TELEMETRY_DATA_HEAD_MD}}
+
 Rules:
 1) Output ONLY the SQL query. No explanations. No markdown. No surrounding text.
 2) Use only these tables/columns. Do not invent fields.

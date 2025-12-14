@@ -1,1 +1,2 @@
-machine_id,machine_name,latest_temperature_timestamp,latest_temperature_value
+machine_id,machine_name,sensor_id,timestamp,last_temperature,unit
+101,Press Machine 1,M101-TEMP-01,2023-10-27 08:30:00,88.27,Celsius
