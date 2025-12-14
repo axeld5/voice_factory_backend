@@ -4,7 +4,6 @@ import argparse
 import json
 import io
 from pathlib import Path
-from threading import Lock
 from typing import Literal, Optional
 
 import duckdb
@@ -255,9 +254,6 @@ class AnswerWithVisualizationPlan(BaseModel):
     viz_title: Optional[str] = None
 
 
-_MATPLOTLIB_LOCK = Lock()
-
-
 def _coerce_datetime_if_possible(s: pd.Series) -> pd.Series:
     try:
         dt = pd.to_datetime(s, errors="coerce", utc=False)
@@ -303,10 +299,11 @@ def render_visualization_png_bytes(
 
     Enforced rules:
     - single-line summary => black text on white image
-    - multi-line summary => matplotlib/seaborn visualization
+    - multi-line summary => plotly visualization (PNG via kaleido)
     """
-    import matplotlib.pyplot as plt
-    import seaborn as sns
+    import plotly.express as px
+    import plotly.graph_objects as go
+    import plotly.io as pio
 
     summary = (answer_summary or "").strip()
     viz_kind = plan.viz_kind
@@ -315,136 +312,121 @@ def render_visualization_png_bytes(
     plan_y = plan.viz_y
     plan_title = plan.viz_title
 
-    with _MATPLOTLIB_LOCK:
-        sns.set_theme(style="whitegrid")
+    def _to_png(fig: go.Figure) -> bytes:
+        # `scale` acts like DPI. 2 gives crisp output without huge images.
+        return pio.to_image(fig, format="png", scale=max(1, int(round(dpi / 100))))
 
-        if viz_kind == "text_image":
-            text = ((plan.text_box or "") or summary).strip()
-            # keep it strictly single-line for the image
-            text = " ".join(text.splitlines()).strip()
-            fig_w = max(6.0, min(16.0, 0.15 * max(len(text), 1)))
-            fig_h = 2.5
-            fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=dpi)
-            fig.patch.set_facecolor("white")
-            ax.set_facecolor("white")
-            ax.axis("off")
-            ax.text(
-                0.5,
-                0.5,
-                text,
-                ha="center",
-                va="center",
-                color="black",
-                fontsize=18,
-                wrap=False,
-            )
-            fig.tight_layout()
-            buf = io.BytesIO()
-            fig.savefig(buf, format="png", bbox_inches="tight", facecolor="white")
-            plt.close(fig)
-            return buf.getvalue()
+    def _text_card(text: str, title: Optional[str] = None) -> bytes:
+        text = " ".join((text or "").splitlines()).strip()
+        fig = go.Figure()
+        fig.add_annotation(
+            text=text or " ",
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            font=dict(size=22, color="#111827"),
+            align="center",
+        )
+        fig.update_xaxes(visible=False)
+        fig.update_yaxes(visible=False)
+        fig.update_layout(
+            title=title or None,
+            margin=dict(l=40, r=40, t=60 if title else 40, b=40),
+            paper_bgcolor="white",
+            plot_bgcolor="white",
+            width=max(700, min(1400, 14 * max(len(text), 40))),
+            height=260,
+        )
+        return _to_png(fig)
 
-        if df is None or df.empty:
-            fig, ax = plt.subplots(figsize=(8, 2.8), dpi=dpi)
-            fig.patch.set_facecolor("white")
-            ax.set_facecolor("white")
-            ax.axis("off")
-            ax.text(
-                0.5,
-                0.5,
-                "No data to visualize.",
-                ha="center",
-                va="center",
-                color="black",
-                fontsize=14,
-            )
-            fig.tight_layout()
-            buf = io.BytesIO()
-            fig.savefig(buf, format="png", bbox_inches="tight", facecolor="white")
-            plt.close(fig)
-            return buf.getvalue()
+    if viz_kind == "text_image":
+        return _text_card(((plan.text_box or "") or summary).strip(), title=plan_title)
 
-        df_plot = df.copy()
-        for c in df_plot.columns:
-            if df_plot[c].dtype == "object":
-                df_plot[c] = _coerce_datetime_if_possible(df_plot[c])
+    if df is None or df.empty:
+        return _text_card("No data to visualize.", title=plan_title or "Result")
 
-        x_col = plan_x if (plan_x in df_plot.columns) else None
-        y_col = plan_y if (plan_y in df_plot.columns) else None
-        kind = viz_kind
+    df_plot = df.copy()
+    for c in df_plot.columns:
+        if df_plot[c].dtype == "object":
+            df_plot[c] = _coerce_datetime_if_possible(df_plot[c])
 
-        if kind in ("bar", "line", "scatter"):
-            if x_col is None or y_col is None:
-                x_col, y_col, kind = _pick_xy(df_plot)
+    x_col = plan_x if (plan_x in df_plot.columns) else None
+    y_col = plan_y if (plan_y in df_plot.columns) else None
+    kind = viz_kind
 
-        if kind == "heatmap":
-            num = df_plot.select_dtypes(include="number")
-            if num.shape[1] >= 2:
-                fig, ax = plt.subplots(figsize=(8, 5), dpi=dpi)
-                corr = num.corr(numeric_only=True)
-                sns.heatmap(corr, annot=False, cmap="viridis", ax=ax)
-                ax.set_title(plan_title or "Correlation heatmap")
-                fig.tight_layout()
-                buf = io.BytesIO()
-                fig.savefig(buf, format="png", bbox_inches="tight")
-                plt.close(fig)
-                return buf.getvalue()
+    if kind in ("bar", "line", "scatter"):
+        if x_col is None or y_col is None:
             x_col, y_col, kind = _pick_xy(df_plot)
 
-        if kind == "bar" and x_col and y_col:
-            fig, ax = plt.subplots(figsize=(9, 5), dpi=dpi)
-            df_small = df_plot.copy()
+    title = plan_title or None
+
+    if kind == "heatmap":
+        num = df_plot.select_dtypes(include="number")
+        if num.shape[1] >= 2:
+            corr = num.corr(numeric_only=True)
+            fig = px.imshow(
+                corr,
+                color_continuous_scale="Viridis",
+                title=title or "Correlation heatmap",
+                aspect="auto",
+            )
+            fig.update_layout(margin=dict(l=40, r=40, t=60, b=40), paper_bgcolor="white")
+            return _to_png(fig)
+        x_col, y_col, kind = _pick_xy(df_plot)
+
+    if kind == "bar" and x_col and y_col:
+        df_small = df_plot.copy()
+        try:
             if df_small[x_col].nunique(dropna=False) > 30:
                 df_small = df_small.head(30)
-            sns.barplot(data=df_small, x=x_col, y=y_col, ax=ax)
-            ax.set_title(plan_title or f"{y_col} by {x_col}")
-            ax.tick_params(axis="x", rotation=30)
-            fig.tight_layout()
-            buf = io.BytesIO()
-            fig.savefig(buf, format="png", bbox_inches="tight")
-            plt.close(fig)
-            return buf.getvalue()
+        except Exception:
+            df_small = df_small.head(30)
+        fig = px.bar(df_small, x=x_col, y=y_col, title=title or f"{y_col} by {x_col}")
+        fig.update_layout(margin=dict(l=40, r=40, t=60, b=40), paper_bgcolor="white", plot_bgcolor="white")
+        fig.update_xaxes(tickangle=25)
+        return _to_png(fig)
 
-        if kind == "line" and x_col and y_col:
-            fig, ax = plt.subplots(figsize=(9, 5), dpi=dpi)
-            df_small = df_plot.sort_values(by=x_col) if x_col in df_plot.columns else df_plot
-            sns.lineplot(data=df_small, x=x_col, y=y_col, ax=ax)
-            ax.set_title(plan_title or f"{y_col} over {x_col}")
-            fig.tight_layout()
-            buf = io.BytesIO()
-            fig.savefig(buf, format="png", bbox_inches="tight")
-            plt.close(fig)
-            return buf.getvalue()
+    if kind == "line" and x_col and y_col:
+        df_small = df_plot.sort_values(by=x_col) if x_col in df_plot.columns else df_plot
+        fig = px.line(df_small, x=x_col, y=y_col, title=title or f"{y_col} over {x_col}")
+        fig.update_layout(margin=dict(l=40, r=40, t=60, b=40), paper_bgcolor="white", plot_bgcolor="white")
+        return _to_png(fig)
 
-        if kind == "scatter" and x_col and y_col:
-            fig, ax = plt.subplots(figsize=(7, 5), dpi=dpi)
-            sns.scatterplot(data=df_plot, x=x_col, y=y_col, ax=ax)
-            ax.set_title(plan_title or f"{y_col} vs {x_col}")
-            fig.tight_layout()
-            buf = io.BytesIO()
-            fig.savefig(buf, format="png", bbox_inches="tight")
-            plt.close(fig)
-            return buf.getvalue()
+    if kind == "scatter" and x_col and y_col:
+        fig = px.scatter(df_plot, x=x_col, y=y_col, title=title or f"{y_col} vs {x_col}")
+        fig.update_layout(margin=dict(l=40, r=40, t=60, b=40), paper_bgcolor="white", plot_bgcolor="white")
+        return _to_png(fig)
 
-        # Table fallback
-        fig, ax = plt.subplots(figsize=(10, 0.5 + 0.35 * min(len(df_plot), 15)), dpi=dpi)
-        ax.axis("off")
-        ax.set_title(plan_title or "Result table")
-        df_show = df_plot.head(15).copy()
-        tbl = ax.table(
-            cellText=df_show.values,
-            colLabels=[str(c) for c in df_show.columns],
-            loc="center",
-            cellLoc="left",
-        )
-        tbl.auto_set_font_size(False)
-        tbl.set_fontsize(9)
-        tbl.scale(1, 1.25)
-        fig.tight_layout()
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png", bbox_inches="tight", facecolor="white")
-        plt.close(fig)
-        return buf.getvalue()
+    # Table fallback
+    df_show = df_plot.head(15).copy()
+    fig = go.Figure(
+        data=[
+            go.Table(
+                header=dict(
+                    values=[str(c) for c in df_show.columns],
+                    fill_color="#0f172a",
+                    font=dict(color="white", size=12),
+                    align="left",
+                ),
+                cells=dict(
+                    values=[df_show[c].astype(str).tolist() for c in df_show.columns],
+                    fill_color="#ffffff",
+                    font=dict(color="#111827", size=11),
+                    align="left",
+                ),
+            )
+        ]
+    )
+    fig.update_layout(
+        title=title or "Result table",
+        margin=dict(l=20, r=20, t=60, b=20),
+        paper_bgcolor="white",
+        width=1100,
+        height=max(300, 80 + 24 * len(df_show)),
+    )
+    return _to_png(fig)
 
 
 def generate_tts_answer(
