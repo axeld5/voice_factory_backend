@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import os
+import time
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -10,6 +12,7 @@ import pandas as pd
 from pyannote_stt import (
     perform_stt_from_local_audio,
     format_turn_level_transcript,
+    preprocess_audio_for_stt,
 )
 from text2sql import (
     get_data_path,
@@ -20,6 +23,28 @@ from text2sql import (
     generate_tts_answer,
 )
 from gradium_tts import tts_from_text_sync
+
+
+def _ts() -> str:
+    """Local timestamp for logs."""
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+class StepTimer:
+    def __init__(self, label: str):
+        self.label = label
+        self._t0: float | None = None
+
+    def __enter__(self):
+        self._t0 = time.perf_counter()
+        print(f"[time] {self.label} start: {_ts()}")
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        t1 = time.perf_counter()
+        elapsed_s = (t1 - (self._t0 or t1))
+        print(f"[time] {self.label} end:   {_ts()}  (+{elapsed_s:.2f}s)")
+        return False
 
 
 def build_transcript_text(stt_bundle: dict, transcript_level: str) -> str:
@@ -107,11 +132,14 @@ def main() -> None:
     ensure_env("PYANNOTE_API_KEY")
     ensure_env("OPENAI_API_KEY")
 
-    print(f"[1/5] STT via pyannote from local audio: {audio_path.name}")
-    stt_result = perform_stt_from_local_audio(
-        audio_path,
-        transcript_level=args.transcript_level,
-    )
+    pipeline_t0 = time.perf_counter()
+    print(f"[time] pipeline start: {_ts()}")
+
+    with StepTimer(f"[1/5] STT via pyannote from local audio: {audio_path.name}"):
+        stt_result = perform_stt_from_local_audio(
+            args.audio,
+            transcript_level=args.transcript_level,
+        )
 
     transcript_text = build_transcript_text(stt_result, args.transcript_level)
     if not transcript_text:
@@ -122,56 +150,57 @@ def main() -> None:
     print("\n--- Transcript (used as user query) ---")
     print(user_query)
 
-    print("\n[2/5] Generate SQL (Text2SQL)")
-    sql = generate_sql(
-        user_query=user_query,
-        prompt_path=args.text2sql_prompt,
-        model=args.text2sql_model,
-        machine_csv=args.machine,
-        sensor_csv=args.sensor,
-        telemetry_csv=args.telemetry,
-    )
+    with StepTimer("[2/5] Generate SQL (Text2SQL)"):
+        sql = generate_sql(
+            user_query=user_query,
+            prompt_path=args.text2sql_prompt,
+            model=args.text2sql_model,
+            machine_csv=args.machine,
+            sensor_csv=args.sensor,
+            telemetry_csv=args.telemetry,
+        )
     print("\n--- Generated SQL ---")
     print(sql)
 
-    print("\n[3/5] Execute SQL in DuckDB against CSVs")
-    df: pd.DataFrame = execute_sql(
-        sql=sql,
-        machine_csv=args.machine,
-        sensor_csv=args.sensor,
-        telemetry_csv=args.telemetry,
-    )
+    with StepTimer("[3/5] Execute SQL in DuckDB against CSVs"):
+        df: pd.DataFrame = execute_sql(
+            sql=sql,
+            machine_csv=args.machine,
+            sensor_csv=args.sensor,
+            telemetry_csv=args.telemetry,
+        )
 
     saved_csv = save_result_csv(df, args.result_out_csv)
     print(f"\n--- Saved SQL result CSV ---\n{saved_csv}")
     print(f"\n--- Result preview (rows={len(df)}, cols={len(df.columns)}) ---")
     print(df.head(20).to_string(index=False) if not df.empty else "(empty)")
 
-    print("\n[4/5] Generate spoken answer from SQL result (output2answer)")
-    answer_text = generate_tts_answer(
-        user_query=user_query,
-        sql_used=sql,
-        df=df,
-        prompt_path=args.output2answer_prompt,
-        model=args.output2answer_model,
-        max_rows_for_model=args.output2answer_max_rows,
-    )
+    with StepTimer("[4/5] Generate spoken answer from SQL result (output2answer)"):
+        answer_text = generate_tts_answer(
+            user_query=user_query,
+            sql_used=sql,
+            df=df,
+            prompt_path=args.output2answer_prompt,
+            model=args.output2answer_model,
+            max_rows_for_model=args.output2answer_max_rows,
+        )
     print("\n--- Answer text ---")
     print(answer_text)
 
-    print("\n[5/5] Gradium TTS -> WAV")
-    tts_res = tts_from_text_sync(
-        answer_text,
-        output_path=args.wav_out,
-        voice_id=args.voice_id,
-        output_format=args.tts_output_format,
-        model_name=args.tts_model_name,
-    )
+    with StepTimer("[5/5] Gradium TTS -> WAV"):
+        tts_res = tts_from_text_sync(
+            answer_text,
+            output_path=args.wav_out,
+            voice_id=args.voice_id,
+            output_format=args.tts_output_format,
+            model_name=args.tts_model_name,
+        )
 
     print("\n=== Done ===")
     print("WAV written:", str(tts_res.output_path))
     print("Sample rate:", tts_res.sample_rate)
     print("TTS request id:", tts_res.request_id)
+    print(f"[time] pipeline end:   {_ts()}  (+{(time.perf_counter() - pipeline_t0):.2f}s)")
 
 
 if __name__ == "__main__":
