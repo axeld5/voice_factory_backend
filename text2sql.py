@@ -309,14 +309,7 @@ def render_visualization_png_bytes(
     import seaborn as sns
 
     summary = (answer_summary or "").strip()
-
-    # Enforce single-line vs multi-line behavior regardless of model output.
-    if "\n" in summary:
-        viz_kind: Literal["bar", "line", "scatter", "heatmap", "table"] = (
-            plan.viz_kind if plan.viz_kind != "text_image" else "table"
-        )
-    else:
-        viz_kind = "text_image"  # type: ignore[assignment]
+    viz_kind = plan.viz_kind
 
     plan_x = plan.viz_x
     plan_y = plan.viz_y

@@ -16,13 +16,18 @@ Rules for SUMMARY:
 - If numbers are present, round sensibly (usually 1–2 decimals) and use units if they appear in column names or values.
 - Do not mention SQL, databases, tables, CSVs, DuckDB, or “rows/columns”.
 - Do not invent values. Do not speculate.
-- If the question asks for a single value, the summary should be a SINGLE LINE (no newline).
-- If the question asks for multiple items (ranked list, breakdown, time series highlights), format the summary as MULTI-LINE with newline-separated lines.
+- If the question asks for multiple items (ranked list, breakdown, time series highlights), you MAY format the summary as MULTI-LINE with newline-separated lines.
 
 Rules for VISUALIZATION PLAN (structured fields):
-- If SUMMARY is a SINGLE LINE, set viz_kind = "text_image"
-- If SUMMARY is MULTI-LINE (contains one or more '\n'), set viz_kind to one of: "bar", "line", "scatter", "heatmap", "table"
-- Choose viz_kind that best matches the result (prefer bar for rankings, line for time series, scatter for relationship, heatmap for all-numeric comparisons, table if nothing else fits).
+- Choose viz_kind based on what is MOST JUSTIFIED for the result and the user intent:
+  - Use viz_kind = "text_image" when the result is best communicated as a small amount of text (e.g., a single value, or a value + timestamp) and a chart would add no value.
+  - Otherwise choose one of: "bar", "line", "scatter", "heatmap", "table".
+- Prefer:
+  - "bar" for rankings / top-N / categorical comparisons
+  - "line" for time series / trends over time
+  - "scatter" for relationship between two numeric measures
+  - "heatmap" for correlation/relationship across multiple numeric columns
+  - "table" if nothing else fits or columns are mostly non-numeric and not time-series
 - Provide viz_x and viz_y when applicable (column names from the result). Use null if not applicable.
 - Provide viz_title as a short title (<= 80 chars). Use null if unnecessary.
 - For viz_kind = "text_image", provide text_box: a MINIMAL, label-free on-screen string.
