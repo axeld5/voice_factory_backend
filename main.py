@@ -53,9 +53,15 @@ def build_transcript_text(stt_bundle: dict, transcript_level: str) -> str:
 
     if transcript_level in ("turn", "both"):
         turns = transcript.get("turnLevelTranscription") or []
-        text = format_turn_level_transcript(turns).strip()
-        if text:
-            return text
+        # Extract only the text from each turn, without speaker labels or timestamps
+        texts = []
+        for t in turns:
+            if isinstance(t, dict):
+                text = (t.get("text") or "").strip()
+                if text:
+                    texts.append(text)
+        if texts:
+            return " ".join(texts).strip()
 
     if transcript_level in ("word", "both"):
         words = transcript.get("wordLevelTranscription") or []
