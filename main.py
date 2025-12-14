@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import time
 from datetime import datetime
@@ -20,7 +21,7 @@ from text2sql import (
     execute_sql,
     save_result_csv,
     generate_tts_answer,
-    render_visualization_png_bytes,
+    render_visualization_plotly_figure,
 )
 from gradium_tts import tts_from_text_sync
 
@@ -193,10 +194,10 @@ def main() -> None:
     answer_text = ans.summary
     print("\n--- Answer summary (TTS) ---")
     print(answer_text)
-    viz_png = render_visualization_png_bytes(answer_summary=answer_text, df=df, plan=ans)
-    viz_path = Path(args.wav_out).with_suffix(".png")
-    viz_path.write_bytes(viz_png)
-    print("\n--- Visualization image ---")
+    fig = render_visualization_plotly_figure(answer_summary=answer_text, df=df, plan=ans)
+    viz_path = Path(args.wav_out).with_suffix(".plotly.json")
+    viz_path.write_text(json.dumps(fig), encoding="utf-8")
+    print("\n--- Visualization (Plotly JSON) ---")
     print(str(viz_path))
 
     with StepTimer("[5/5] Gradium TTS -> WAV"):

@@ -287,23 +287,28 @@ def _pick_xy(df: pd.DataFrame) -> tuple[Optional[str], Optional[str], str]:
     return None, None, "table"
 
 
-def render_visualization_png_bytes(
+def render_visualization_plotly_figure(
     *,
     answer_summary: str,
     df: pd.DataFrame,
     plan: Output2AnswerStructured,
     dpi: int = 200,
-) -> bytes:
+) -> dict:
     """
-    Render the visualization to PNG bytes.
+    Render the visualization as a Plotly figure JSON (dict).
 
     Enforced rules:
     - single-line summary => black text on white image
-    - multi-line summary => plotly visualization (PNG via kaleido)
+    - multi-line summary => plotly visualization (rendered client-side)
     """
-    import plotly.express as px
-    import plotly.graph_objects as go
-    import plotly.io as pio
+    try:
+        import plotly.express as px
+        import plotly.graph_objects as go
+    except ModuleNotFoundError as e:
+        raise RuntimeError(
+            "Plotly rendering requires the `plotly` dependency. "
+            "Install it with: `pip install plotly` (or if you use uv: `uv sync`)."
+        ) from e
 
     summary = (answer_summary or "").strip()
     viz_kind = plan.viz_kind
@@ -312,11 +317,16 @@ def render_visualization_png_bytes(
     plan_y = plan.viz_y
     plan_title = plan.viz_title
 
-    def _to_png(fig: go.Figure) -> bytes:
-        # `scale` acts like DPI. 2 gives crisp output without huge images.
-        return pio.to_image(fig, format="png", scale=max(1, int(round(dpi / 100))))
+    def _as_dict(fig: "go.Figure") -> dict:
+        """
+        Return a JSON-serializable dict (no numpy/pandas objects).
 
-    def _text_card(text: str, title: Optional[str] = None) -> bytes:
+        FastAPI/Pydantic will error if the payload contains numpy arrays/scalars,
+        which can happen when a figure is built from pandas/numpy structures.
+        """
+        return json.loads(fig.to_json())
+
+    def _text_card(text: str, title: Optional[str] = None) -> dict:
         text = " ".join((text or "").splitlines()).strip()
         fig = go.Figure()
         fig.add_annotation(
@@ -339,7 +349,7 @@ def render_visualization_png_bytes(
             width=max(700, min(1400, 14 * max(len(text), 40))),
             height=260,
         )
-        return _to_png(fig)
+        return _as_dict(fig)
 
     if viz_kind == "text_image":
         return _text_card(((plan.text_box or "") or summary).strip(), title=plan_title)
@@ -373,7 +383,7 @@ def render_visualization_png_bytes(
                 aspect="auto",
             )
             fig.update_layout(margin=dict(l=40, r=40, t=60, b=40), paper_bgcolor="white")
-            return _to_png(fig)
+            return _as_dict(fig)
         x_col, y_col, kind = _pick_xy(df_plot)
 
     if kind == "bar" and x_col and y_col:
@@ -386,18 +396,18 @@ def render_visualization_png_bytes(
         fig = px.bar(df_small, x=x_col, y=y_col, title=title or f"{y_col} by {x_col}")
         fig.update_layout(margin=dict(l=40, r=40, t=60, b=40), paper_bgcolor="white", plot_bgcolor="white")
         fig.update_xaxes(tickangle=25)
-        return _to_png(fig)
+        return _as_dict(fig)
 
     if kind == "line" and x_col and y_col:
         df_small = df_plot.sort_values(by=x_col) if x_col in df_plot.columns else df_plot
         fig = px.line(df_small, x=x_col, y=y_col, title=title or f"{y_col} over {x_col}")
         fig.update_layout(margin=dict(l=40, r=40, t=60, b=40), paper_bgcolor="white", plot_bgcolor="white")
-        return _to_png(fig)
+        return _as_dict(fig)
 
     if kind == "scatter" and x_col and y_col:
         fig = px.scatter(df_plot, x=x_col, y=y_col, title=title or f"{y_col} vs {x_col}")
         fig.update_layout(margin=dict(l=40, r=40, t=60, b=40), paper_bgcolor="white", plot_bgcolor="white")
-        return _to_png(fig)
+        return _as_dict(fig)
 
     # Table fallback
     df_show = df_plot.head(15).copy()
@@ -426,7 +436,7 @@ def render_visualization_png_bytes(
         width=1100,
         height=max(300, 80 + 24 * len(df_show)),
     )
-    return _to_png(fig)
+    return _as_dict(fig)
 
 
 def generate_tts_answer(
@@ -536,11 +546,11 @@ def run_pipeline(
         )
         print("\n--- Answer Summary (TTS) ---")
         print(answer.summary)
-        viz_png = render_visualization_png_bytes(answer_summary=answer.summary, df=df, plan=answer)
-        viz_out = get_outputs_dir() / "visualization.png"
+        fig = render_visualization_plotly_figure(answer_summary=answer.summary, df=df, plan=answer)
+        viz_out = get_outputs_dir() / "visualization.json"
         viz_out.parent.mkdir(parents=True, exist_ok=True)
-        viz_out.write_bytes(viz_png)
-        print("\n--- Visualization Image ---")
+        viz_out.write_text(json.dumps(fig), encoding="utf-8")
+        print("\n--- Visualization (Plotly JSON) ---")
         print(str(viz_out))
 
     # Print a ready-to-run command for output2answer.py

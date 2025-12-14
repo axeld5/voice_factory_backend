@@ -15,5 +15,4 @@ dependencies = [
   "uvicorn[standard]>=0.30.0",
   "python-multipart>=0.0.9",
   "plotly>=5.20.0",
-  "kaleido>=0.2.1"
 ]

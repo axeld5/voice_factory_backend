@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import base64
 import logging
 import mimetypes
 import os
 import time
 import uuid
+import base64
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Optional
@@ -25,7 +25,7 @@ from text2sql import (
     generate_tts_answer,
     get_data_path,
     get_prompt_path,
-    render_visualization_png_bytes,
+    render_visualization_plotly_figure,
 )
 
 load_dotenv()
@@ -83,16 +83,14 @@ class VoiceFactoryOutput:
 
     - answer_text: the final text answer (what you call "answer text")
     - audio_bytes: TTS audio bytes of answer_text
-    - visualization_bytes: PNG bytes of the visualization
+    - visualization: Plotly figure JSON (dict) for frontend rendering
     """
 
     # The final natural-language question used by the pipeline (typed text or STT transcript)
     question_text: str
     # The final answer (natural language)
     answer_text: str
-    visualization_bytes: Optional[bytes] = None
-    visualization_filename: Optional[str] = None
-    visualization_mime_type: Optional[str] = None
+    visualization: Optional[dict] = None
     audio_bytes: Optional[bytes] = None
     audio_filename: Optional[str] = None
     audio_mime_type: Optional[str] = None
@@ -100,12 +98,8 @@ class VoiceFactoryOutput:
     def to_api_payload(self) -> dict:
         payload: dict = {"answer_text": self.answer_text}
         payload["question_text"] = self.question_text
-        if self.visualization_bytes is not None:
-            payload["visualization"] = {
-                "filename": self.visualization_filename or "visualization.png",
-                "mime_type": self.visualization_mime_type or "image/png",
-                "image_base64": base64.b64encode(self.visualization_bytes).decode("ascii"),
-            }
+        if self.visualization is not None:
+            payload["visualization"] = self.visualization
         if self.audio_bytes is None:
             return payload
 
@@ -216,19 +210,16 @@ async def run_voice_factory_pipeline(
     # 4b) Visualization
     s = _Step("viz", time.perf_counter())
     out_id = uuid.uuid4().hex
-    viz_png = render_visualization_png_bytes(
+    fig = render_visualization_plotly_figure(
         answer_summary=answer_text,
         df=df,
         plan=ans,
     )
-    viz_path = paths["outputs_dir"] / f"visualization_{out_id}.png"
-    viz_path.write_bytes(viz_png)
+    viz_payload = {"type": "plotly", "figure": fig}
     logger.info(
-        "[%s] viz_done ms=%.1f png_bytes=%d file=%s",
+        "[%s] viz_done ms=%.1f kind=plotly",
         rid,
         s.ms(),
-        len(viz_png),
-        viz_path.name,
     )
 
     if not include_audio:
@@ -236,9 +227,7 @@ async def run_voice_factory_pipeline(
         return VoiceFactoryOutput(
             question_text=user_query,
             answer_text=answer_text,
-            visualization_bytes=viz_png,
-            visualization_filename=viz_path.name,
-            visualization_mime_type="image/png",
+            visualization=viz_payload,
         )
 
     # 5) TTS (bytes)
@@ -269,9 +258,7 @@ async def run_voice_factory_pipeline(
     return VoiceFactoryOutput(
         question_text=user_query,
         answer_text=answer_text,
-        visualization_bytes=viz_png,
-        visualization_filename=viz_path.name,
-        visualization_mime_type="image/png",
+        visualization=viz_payload,
         audio_bytes=tts_res.audio_bytes,
         audio_filename=tts_res.output_path.name,
         audio_mime_type=mime,
